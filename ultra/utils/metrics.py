@@ -32,6 +32,7 @@ from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import math_ops
 from ultra.utils import metric_utils as utils
 
+_LINEAR_GAIN_FN = lambda label: label
 
 class RankingMetricKey(object):
     """Ranking metric key strings."""
@@ -48,8 +49,14 @@ class RankingMetricKey(object):
     # Normalized Discounted Culmulative Gain.
     NDCG = 'ndcg'
 
+    # Linear Normalized Discounted Culmulative Gain.
+    LINEAR_NDCG = 'linear_ndcg'
+
     # Discounted Culmulative Gain.
     DCG = 'dcg'
+
+    # Linear Discounted Culmulative Gain.
+    LINEAR_DCG = 'linear_dcg'
 
     # Precision. For binary relevance.
     PRECISION = 'precision'
@@ -107,10 +114,29 @@ def make_ranking_metric_fn(metric_key,
             weights=weights,
             topn=topn,
             name=name)
+    
+    def _normalized_discounted_cumulative_linear_gain_fn(
+            labels, predictions, weights):
+        """Returns normalized discounted cumulative linear gain as the metric."""
+        return normalized_discounted_cumulative_linear_gain(
+            labels,
+            predictions,
+            weights=weights,
+            topn=topn,
+            name=name)
 
     def _discounted_cumulative_gain_fn(labels, predictions, weights):
         """Returns discounted cumulative gain as the metric."""
         return discounted_cumulative_gain(
+            labels,
+            predictions,
+            weights=weights,
+            topn=topn,
+            name=name)
+    
+    def _discounted_cumulative_linear_gain_fn(labels, predictions, weights):
+        """Returns discounted cumulative linear gain as the metric."""
+        return discounted_cumulative_linear_gain(
             labels,
             predictions,
             weights=weights,
@@ -145,7 +171,9 @@ def make_ranking_metric_fn(metric_key,
         RankingMetricKey.MRR: _mean_reciprocal_rank_fn,
         RankingMetricKey.ERR: _expected_reciprocal_rank_fn,
         RankingMetricKey.NDCG: _normalized_discounted_cumulative_gain_fn,
+        RankingMetricKey.LINEAR_NDCG: _normalized_discounted_cumulative_linear_gain_fn,
         RankingMetricKey.DCG: _discounted_cumulative_gain_fn,
+        RankingMetricKey.LINEAR_DCG: _discounted_cumulative_linear_gain_fn,
         RankingMetricKey.PRECISION: _precision_fn,
         RankingMetricKey.MAP: _mean_average_precision_fn,
         RankingMetricKey.ORDERED_PAIR_ACCURACY: _ordered_pair_accuracy_fn,
@@ -208,6 +236,28 @@ def _discounted_cumulative_gain(labels, weights=None):
     position = math_ops.to_float(math_ops.range(1, list_size + 1))
     denominator = math_ops.log(position + 1)
     numerator = math_ops.pow(2.0, math_ops.to_float(labels)) - 1.0
+    return math_ops.reduce_sum(
+        weights * numerator / denominator, 1, keepdims=True)
+
+def _discounted_cumulative_linear_gain(labels, weights=None):
+    """Computes discounted cumulative gain (DCG).
+
+    DCG =  SUM((label) / (log(1+rank))).
+
+    Args:
+     labels: The relevance `Tensor` of shape [batch_size, list_size]. For the
+       ideal ranking, the examples are sorted by relevance in reverse order.
+      weights: A `Tensor` of the same shape as labels or [batch_size, 1]. The
+        former case is per-example and the latter case is per-list.
+
+    Returns:
+      A `Tensor` as the weighted discounted cumulative gain per-list. The
+      tensor shape is [batch_size, 1].
+    """
+    list_size = array_ops.shape(labels)[1]
+    position = math_ops.to_float(math_ops.range(1, list_size + 1))
+    denominator = math_ops.log(position + 1)
+    numerator = _LINEAR_GAIN_FN(math_ops.to_float(labels))
     return math_ops.reduce_sum(
         weights * numerator / denominator, 1, keepdims=True)
 
@@ -481,6 +531,44 @@ def normalized_discounted_cumulative_gain(labels,
         return math_ops.reduce_mean(per_list_ndcg * per_list_weights)
 
 
+def normalized_discounted_cumulative_linear_gain(labels,
+                                          predictions,
+                                          weights=None,
+                                          topn=None,
+                                          name=None):
+    """Computes normalized discounted cumulative linear gain (NDCG).
+
+    Args:
+      labels: A `Tensor` of the same shape as `predictions`.
+      predictions: A `Tensor` with shape [batch_size, list_size]. Each value is
+        the ranking score of the corresponding example.
+      weights: A `Tensor` of the same shape of predictions or [batch_size, 1]. The
+        former case is per-example and the latter case is per-list.
+      topn: A cutoff for how many examples to consider for this metric.
+      name: A string used as the name for this metric.
+
+    Returns:
+      A metric for the weighted normalized discounted cumulative gain of the
+      batch.
+    """
+    with ops.name_scope(name, 'normalized_discounted_cumulative_gain',
+                        (labels, predictions, weights)):
+        labels, predictions, weights, topn = _prepare_and_validate_params(
+            labels, predictions, weights, topn)
+        sorted_labels, sorted_weights = utils.sort_by_scores(
+            predictions, [labels, weights], topn=topn)
+        dcg = _discounted_cumulative_linear_gain(sorted_labels, sorted_weights)
+        # Sorting over the weighted labels to get ideal ranking.
+        ideal_sorted_labels, ideal_sorted_weights = utils.sort_by_scores(
+            weights * labels, [labels, weights], topn=topn)
+        ideal_dcg = _discounted_cumulative_linear_gain(ideal_sorted_labels,
+                                                ideal_sorted_weights)
+        per_list_ndcg = _safe_div(dcg, ideal_dcg)
+        per_list_weights = _per_example_weights_to_per_list_weights(
+            weights=weights,
+            relevance=_LINEAR_GAIN_FN(math_ops.to_float(labels)))
+        return math_ops.reduce_mean(per_list_ndcg * per_list_weights)
+
 def discounted_cumulative_gain(labels,
                                predictions,
                                weights=None,
@@ -511,6 +599,39 @@ def discounted_cumulative_gain(labels,
         per_list_weights = _per_example_weights_to_per_list_weights(
             weights=weights,
             relevance=math_ops.pow(2.0, math_ops.to_float(labels)) - 1.0)
+        return math_ops.reduce_mean(
+            _safe_div(dcg, per_list_weights) * per_list_weights)
+
+def discounted_cumulative_linear_gain(labels,
+                               predictions,
+                               weights=None,
+                               topn=None,
+                               name=None):
+    """Computes discounted cumulative gain (DCG).
+
+    Args:
+      labels: A `Tensor` of the same shape as `predictions`.
+      predictions: A `Tensor` with shape [batch_size, list_size]. Each value is
+        the ranking score of the corresponding example.
+      weights: A `Tensor` of the same shape of predictions or [batch_size, 1]. The
+        former case is per-example and the latter case is per-list.
+      topn: A cutoff for how many examples to consider for this metric.
+      name: A string used as the name for this metric.
+
+    Returns:
+      A metric for the weighted discounted cumulative gain of the batch.
+    """
+    with ops.name_scope(name, 'discounted_cumulative_gain',
+                        (labels, predictions, weights)):
+        labels, predictions, weights, topn = _prepare_and_validate_params(
+            labels, predictions, weights, topn)
+        sorted_labels, sorted_weights = utils.sort_by_scores(
+            predictions, [labels, weights], topn=topn)
+        dcg = _discounted_cumulative_linear_gain(sorted_labels,
+                                          sorted_weights) * math_ops.log1p(1.0)
+        per_list_weights = _per_example_weights_to_per_list_weights(
+            weights=weights,
+            relevance=_LINEAR_GAIN_FN(math_ops.to_float(labels)))
         return math_ops.reduce_mean(
             _safe_div(dcg, per_list_weights) * per_list_weights)
 

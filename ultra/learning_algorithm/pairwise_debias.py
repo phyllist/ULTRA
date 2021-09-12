@@ -68,6 +68,7 @@ class PairDebias(BaseAlgorithm):
             # Set strength for L2 regularization.
             l2_loss=0.0,
             grad_strategy='ada',            # Select gradient strategy
+            loss_type="pairwise_cross_entropy",  # Select loss type
         )
         print(exp_settings['learning_algorithm_hparams'])
         self.hparams.parse(exp_settings['learning_algorithm_hparams'])
@@ -140,22 +141,29 @@ class PairDebias(BaseAlgorithm):
             t_plus_loss_list = [0.0 for _ in range(self.rank_list_size)]
             t_minus_loss_list = [0.0 for _ in range(self.rank_list_size)]
             self.loss = 0.0
-            for i in range(self.rank_list_size):
-                for j in range(self.rank_list_size):
-                    if i == j:
-                        continue
-                    valid_pair_mask = tf.math.minimum(
-                        tf.ones_like(
-                            self.labels[i]), tf.nn.relu(
-                            self.labels[i] - self.labels[j]))
-                    pair_loss = tf.reduce_sum(
-                        valid_pair_mask *
-                        self.pairwise_cross_entropy_loss(
-                            output_list[i], output_list[j])
-                    )
-                    t_plus_loss_list[i] += pair_loss / self.splitted_t_minus[j]
-                    t_minus_loss_list[j] += pair_loss / self.splitted_t_plus[i]
-                    self.loss += pair_loss / \
+            if self.hparams.loss_type == "pairwise_cross_entropy":
+                for i in range(self.rank_list_size):
+                    for j in range(self.rank_list_size):
+                        if i == j:
+                            continue
+                        valid_pair_mask = tf.math.minimum(
+                            tf.ones_like(
+                                self.labels[i]), tf.nn.relu(
+                                    self.labels[i] - self.labels[j]))
+                        pair_loss = tf.reduce_sum(
+                            valid_pair_mask *
+                            self.pairwise_cross_entropy_loss(
+                                output_list[i], output_list[j])
+                            )
+                        t_plus_loss_list[i] += pair_loss / self.splitted_t_minus[j]
+                        t_minus_loss_list[j] += pair_loss / self.splitted_t_plus[i]
+                        self.loss += pair_loss / \
+                                self.splitted_t_plus[i] / self.splitted_t_minus[j]
+            elif self.hparams.loss_type == "pairwise_logistic":
+                pair_loss = self.pairwise_logistic_loss(labels=train_labels, outputs=train_output)
+                t_plus_loss_list[i] += pair_loss / self.splitted_t_minus[j]
+                t_minus_loss_list[j] += pair_loss / self.splitted_t_plus[i]
+                self.loss += pair_loss / \
                         self.splitted_t_plus[i] / self.splitted_t_minus[j]
 
             # Update propensity

@@ -1,0 +1,21 @@
+{
+
+    "train_input_feed":"ultra.input_layer.MTLSimulationFeed",
+    "train_input_hparams":"",
+    "valid_input_feed":"ultra.input_layer.DirectLabelFeed",
+    "valid_input_hparams":"",
+    "test_input_feed":"ultra.input_layer.DirectLabelFeed",
+    "test_input_hparams":"",
+
+    "ranking_model":"ultra.ranking_model.BiasTowerDNN",
+    "ranking_model_hparams":"hidden_layer_sizes=[512, 256, 128]",
+
+    "learning_algorithm": "ultra.learning_algorithm.NavieAlgorithm",
+    "learning_algorithm_hparams":"loss_func=mse_loss",
+
+    "metrics": [
+        "mrr", "linear_ndcg", "ndcg"
+    ],
+    "metrics_topn" : [3,5,10],
+    "objective_metric": "ndcg_10"
+}

@@ -8,9 +8,10 @@ from .pdgd import *
 from .dbgd import *
 from .pairwise_debias import *
 from .navie_algorithm import *
+from .navie_mtl_algorithm import *
 from .mgd import *
 from .nsgd import *
-
+from .pairwise_reg_em import *
 
 def list_available() -> list:
     from .base_algorithm import BaseAlgorithm

@@ -5,8 +5,8 @@ import sys
 import tensorflow as tf
 from ultra.ranking_model import BaseRankingModel
 from ultra.ranking_model import ActivationFunctions
+from ultra.ranking_model import NormalizationFunctions
 import ultra.utils
-
 
 class DNN(BaseRankingModel):
     """The deep neural network model for learning to rank.
@@ -14,7 +14,6 @@ class DNN(BaseRankingModel):
     This class implements a deep neural network (DNN) based ranking model. It's essientially a multi-layer perceptron network.
 
     """
-
     def __init__(self, hparams_str):
         """Create the network.
 
@@ -28,13 +27,13 @@ class DNN(BaseRankingModel):
             # Type for activation function, which could be elu, relu, sigmoid,
             # or tanh
             activation_func='elu',
-            initializer='None',                         # Set parameter initializer
+            initializer='glorot',                         # Set parameter initializer
             norm="layer"                                # Set the default normalization
         )
         self.hparams.parse(hparams_str)
         self.initializer = None
         self.act_func = None
-        self.layer_norm = None
+        self.layer_norm = {}
 
         if self.hparams.activation_func in BaseRankingModel.ACT_FUNC_DIC:
             self.act_func = BaseRankingModel.ACT_FUNC_DIC[self.hparams.activation_func]
@@ -61,24 +60,33 @@ class DNN(BaseRankingModel):
 
         with tf.variable_scope(tf.get_variable_scope(), initializer=self.initializer,
                                reuse=tf.AUTO_REUSE):
+            var_scope_name = tf.get_variable_scope().name
             input_data = tf.concat(input_list, axis=0)
             output_data = input_data
             output_sizes = self.hparams.hidden_layer_sizes + [1]
-
-            if self.layer_norm is None and self.hparams.norm in BaseRankingModel.NORM_FUNC_DIC:
-                self.layer_norm = []
+            if (var_scope_name not in self.layer_norm) \
+                and (self.hparams.norm in BaseRankingModel.NORM_FUNC_DIC):
+                self.layer_norm[var_scope_name] = []
                 for j in range(len(output_sizes)):
-                    self.layer_norm.append(BaseRankingModel.NORM_FUNC_DIC[self.hparams.norm](
-                        name="layer_norm_%d" % j))
+                    self.layer_norm[var_scope_name].append(BaseRankingModel.NORM_FUNC_DIC[self.hparams.norm](
+                        name="%s_norm_%d" % (self.hparams.norm, j)))
+
+            layer_norm = None
+            if var_scope_name in self.layer_norm:
+                layer_norm = self.layer_norm[var_scope_name]
+                print('layer_norm objs for %s is:' % var_scope_name)
+                print(layer_norm)
+            else:
+                print('no layer_norm objs for %s' % var_scope_name)
 
             current_size = output_data.get_shape()[-1].value
             for j in range(len(output_sizes)):
-                if self.layer_norm is not None:
+                if layer_norm is not None:
                     if self.hparams.norm == "layer":
-                        output_data = self.layer_norm[j](
+                        output_data = layer_norm[j](
                             output_data)
                     else:
-                        output_data = self.layer_norm[j](
+                        output_data = layer_norm[j](
                             output_data, training=is_training)
                 expand_W = self.get_variable(
                     "dnn_W_%d" % j, [current_size, output_sizes[j]], noisy_params=noisy_params, noise_rate=noise_rate)

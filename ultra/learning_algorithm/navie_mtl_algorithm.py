@@ -17,7 +17,7 @@ from ultra.learning_algorithm.base_algorithm import BaseAlgorithm
 import ultra.utils
 
 
-class NavieAlgorithm(BaseAlgorithm):
+class NavieMTLAlgorithm(BaseAlgorithm):
     """The navie algorithm that directly trains ranking models with input labels.
 
     """
@@ -35,22 +35,24 @@ class NavieAlgorithm(BaseAlgorithm):
         self.hparams = ultra.utils.hparams.HParams(
             learning_rate=0.05,                 # Learning rate.
             max_gradient_norm=5.0,            # Clip gradients to this norm.
-            loss_func='softmax_cross_entropy',            # Select Loss function
+            loss_funcs=['sigmoid_cross_entropy', 'mse_loss'],            # Select Loss function
             loss_enable_sigmoid=True,              # whether enable sigmoid on prediction when calculate loss
             # Set strength for L2 regularization.
             l2_loss=0.0,
             grad_strategy='ada',            # Select gradient strategy
+            tasks=["click", "watchtime"],
+            output_acts=['identity', 'identity'],
+            enable_esmm=False,
+            esmm_stop_gradient=False
         )
-        print("hparams:", exp_settings['learning_algorithm_hparams'])
         self.hparams.parse(exp_settings['learning_algorithm_hparams'])
+        print("hparams:", self.hparams)
         self.exp_settings = exp_settings
         self.model = None
         self.max_candidate_num = exp_settings['max_candidate_num']
         self.feature_size = data_set.feature_size
         self.learning_rate = tf.Variable(
             float(self.hparams.learning_rate), trainable=False)
-
-        print("loss_func:", self.hparams.loss_func)
 
         # Feeds for inputs.
         self.is_training = tf.placeholder(tf.bool, name="is_train")
@@ -61,20 +63,43 @@ class NavieAlgorithm(BaseAlgorithm):
         for i in range(self.max_candidate_num):
             self.docid_inputs.append(tf.placeholder(tf.int64, shape=[None],
                                                     name="docid_input{0}".format(i)))
-            self.labels.append(tf.placeholder(tf.float32, shape=[None],
+            self.labels.append(tf.placeholder(tf.float32, shape=[None, len(self.hparams.tasks)],
                                               name="label{0}".format(i)))
 
         self.global_step = tf.Variable(0, trainable=False)
 
         # Build model
-        self.output = self.ranking_model(
+        self.outputs = self.ranking_model(
             self.max_candidate_num, scope='ranking_model', forward_only=True) # forward_only: do not use bias tower
-        print("self.output:", self.output)
+        for task_idx in range(0, len(self.hparams.tasks)):
+            loss_func = self.hparams.loss_funcs[task_idx]
+            output_act =  self.hparams.output_acts[task_idx]
+            print("loss func:", loss_func)
+            print("output_act:", output_act)
+            #if str(loss_func) == 'sigmoid_cross_entropy':
+            if str(output_act) == 'sigmoid':
+                print("sigmoid on task ", self.hparams.tasks[task_idx])
+                output = tf.nn.sigmoid(self.outputs[task_idx])
+            else:
+                print("identity on task ", self.hparams.tasks[task_idx])
+                output = self.outputs[task_idx]
+            if task_idx == 0:
+                self.output = output
+                #self.output = self.outputs[task_idx]
+            else:
+                if self.hparams.enable_esmm:
+                    print("enable esmm for task %s when calculate test metric" % self.hparams.tasks[task_idx])
+                    output = tf.nn.sigmoid(self.outputs[0]) * output
+                self.output += output
+                #self.output += self.outputs[task_idx]
 
         # reshape from [max_candidate_num, ?] to [?, max_candidate_num]
-        reshaped_labels = tf.transpose(tf.convert_to_tensor(self.labels))
+        reshaped_labels = tf.transpose(tf.convert_to_tensor(tf.reduce_sum(self.labels, axis=-1)))
+        print("reshaped_labels:", reshaped_labels)
+        print("self.output:", self.output)
         pad_removed_output = self.remove_padding_for_metric_eval(
             self.docid_inputs, self.output)
+        print("pad_removed_output:", pad_removed_output)
         for metric in self.exp_settings['metrics']:
             for topn in self.exp_settings['metrics_topn']:
                 metric_value = ultra.utils.make_ranking_metric_fn(
@@ -86,56 +111,68 @@ class NavieAlgorithm(BaseAlgorithm):
         if not forward_only:
             # Build model
             self.rank_list_size = exp_settings['selection_bias_cutoff']
-            train_output = self.ranking_model(
-                self.rank_list_size, scope='ranking_model', forward_only=forward_only)
-            train_labels = self.labels[:self.rank_list_size]
-            print("train_output:", train_output)
+            train_outputs = self.ranking_model(
+                self.rank_list_size, scope='ranking_model', forward_only=forward_only) # [batch_size, rank_list_size]
+            train_labelss = self.labels[:self.rank_list_size] # [rank_list_size, batch_size, task_num]
 
-            tf.summary.scalar(
-                'Max_output_score',
-                tf.reduce_max(train_output),
-                collections=['train'])
-            tf.summary.scalar(
-                'Min_output_score',
-                tf.reduce_min(train_output),
-                collections=['train'])
+            for task_idx, task in enumerate(self.hparams.tasks):
+                train_labels = [tf.squeeze(tf.slice(train_label, [0,task_idx], [-1,1]), axis=-1) for train_label in train_labelss]
+                print("train_labels:", train_labels)
+                train_output = train_outputs[task_idx]
+                if task_idx == 1 and self.hparams.enable_esmm:
+                    print("enable esmm for task %s when calculate loss" % self.hparams.tasks[task_idx])
+                    if self.hparams.esmm_stop_gradient:
+                        print("stop gradient on click when calculate loss")
+                        pred_click = tf.stop_gradient(tf.nn.sigmoid(train_outputs[0]))
+                    else:
+                        pred_click = tf.nn.sigmoid(train_outputs[0])
+                    train_output = train_output * pred_click
+                tf.summary.scalar(
+                    'Max_output_score_%s' %task,
+                    tf.reduce_max(train_output),
+                    collections=['train'])
+                tf.summary.scalar(
+                    'Min_output_score_%s' %task,
+                    tf.reduce_min(train_output),
+                    collections=['train'])
 
-            # reshape from [rank_list_size, ?] to [?, rank_list_size]
-            reshaped_train_labels = tf.transpose(
-                tf.convert_to_tensor(train_labels))
-            pad_removed_train_output = self.remove_padding_for_metric_eval(
-                self.docid_inputs, train_output)
+                # reshape from [rank_list_size, ?] to [?, rank_list_size]
+                reshaped_train_labels = tf.transpose(
+                    tf.convert_to_tensor(train_labels))
+                print("reshaped_train_labels:", reshaped_train_labels)
+                pad_removed_train_output = self.remove_padding_for_metric_eval(
+                    self.docid_inputs, train_output)
 
-            tf.summary.scalar(
-                'Max_output_score_without_pad',
-                tf.reduce_max(pad_removed_train_output),
-                collections=['train'])
-            tf.summary.scalar(
-                'Min_output_score_without_pad',
-                tf.reduce_min(pad_removed_train_output),
-                collections=['train'])
+                tf.summary.scalar(
+                    'Max_output_score_without_pad_%s' %task,
+                    tf.reduce_max(pad_removed_train_output),
+                    collections=['train'])
+                tf.summary.scalar(
+                    'Min_output_score_without_pad_%s' %task,
+                    tf.reduce_min(pad_removed_train_output),
+                    collections=['train'])
 
-            self.loss = None
-            if self.hparams.loss_func == 'sigmoid_cross_entropy':
-                print("sigmoid_cross_entropy loss on task")
-                self.loss = self.sigmoid_loss_on_list(
-                    train_output, reshaped_train_labels, enable_sigmoid=self.hparams.loss_enable_sigmoid)
-            elif self.hparams.loss_func == 'pairwise_loss':
-                print("pairwise_loss on task")
-                self.loss = self.pairwise_loss_on_list(
-                    train_output, reshaped_train_labels)
-            elif self.hparams.loss_func == "mse_loss":
-                print("mse_loss on task")
-                self.loss = self.mse_loss_on_list(
-                    train_output, reshaped_train_labels)
-            elif self.hparams.loss_func == "pairwise_logistic_loss":
-                print("pairwise_logistic_loss on task")
-                self.loss = self.pairwise_logistic_loss(
-                    reshaped_train_labels, train_output)
-            else:
-                print("softmax_loss on task")
-                self.loss = self.softmax_loss(
-                    train_output, reshaped_train_labels)
+                loss = None
+                if self.hparams.loss_funcs[task_idx] == 'sigmoid_cross_entropy':
+                    print("sigmoid_cross_entropy loss on task ", self.hparams.tasks[task_idx])
+                    loss = self.sigmoid_loss_on_list(
+                        train_output, reshaped_train_labels, enable_sigmoid=self.hparams.loss_enable_sigmoid)
+                elif self.hparams.loss_funcs[task_idx] == 'pairwise_loss':
+                    print("pairwise_loss on task ", self.hparams.tasks[task_idx])
+                    loss = self.pairwise_loss_on_list(
+                        train_output, reshaped_train_labels)
+                elif self.hparams.loss_funcs[task_idx] == "mse_loss":
+                    print("mse_loss on task ", self.hparams.tasks[task_idx])
+                    loss = self.mse_loss_on_list(
+                        train_output, reshaped_train_labels)
+                else:
+                    print("softmax_loss on task ", self.hparams.tasks[task_idx])
+                    loss = self.softmax_loss(
+                        train_output, reshaped_train_labels)
+                if task_idx == 0:
+                    self.loss = loss
+                else:
+                    self.loss += loss
             params = tf.trainable_variables()
             if self.hparams.l2_loss > 0:
                 loss_l2 = 0.0
@@ -175,12 +212,33 @@ class NavieAlgorithm(BaseAlgorithm):
             tf.summary.scalar(
                 'Loss', tf.reduce_mean(
                     self.loss), collections=['train'])
+            for task_idx in range(0, len(self.hparams.tasks)):
+                output_act =  self.hparams.output_acts[task_idx]
+                #if self.hparams.loss_funcs[task_idx] == 'sigmoid_cross_entropy':
+                if str(output_act) == 'sigmoid':
+                    print("sigmoid on task ", self.hparams.tasks[task_idx])
+                    train_output = tf.nn.sigmoid(train_outputs[task_idx])
+                else:
+                    print("identity on task ", self.hparams.tasks[task_idx])
+                    train_output = train_outputs[task_idx]
+                if task_idx == 0:
+                    train_output_sum = train_output
+                else:
+                    if self.hparams.enable_esmm:
+                        print("enable esmm for task %s when calculate train metric" % self.hparams.tasks[task_idx])
+                        train_output = tf.nn.sigmoid(train_outputs[0]) * train_output
+                    train_output_sum += train_output
+            print("train_output_sum:", train_output_sum)
+            print("train_labelss:", train_labelss)
+            reshaped_train_labels_sum = tf.transpose(
+                    tf.reduce_sum(tf.convert_to_tensor(train_labelss), axis=-1))
+            print("reshaped_train_labels_sum:", reshaped_train_labels_sum)
             pad_removed_train_output = self.remove_padding_for_metric_eval(
-                self.docid_inputs, train_output)
+                self.docid_inputs, train_output_sum)
             for metric in self.exp_settings['metrics']:
                 for topn in self.exp_settings['metrics_topn']:
                     metric_value = ultra.utils.make_ranking_metric_fn(metric, topn)(
-                        reshaped_train_labels, pad_removed_train_output, None)
+                        reshaped_train_labels_sum, pad_removed_train_output, None)
                     tf.summary.scalar(
                         '%s_%d' %
                         (metric, topn), metric_value, collections=['train'])
@@ -217,7 +275,6 @@ class NavieAlgorithm(BaseAlgorithm):
                 self.eval_summary,  # Summarize statistics.
                 self.output   # Model outputs
             ]
-
         outputs = session.run(output_feed, input_feed)
         if not forward_only:
             # loss, no outputs, summary.

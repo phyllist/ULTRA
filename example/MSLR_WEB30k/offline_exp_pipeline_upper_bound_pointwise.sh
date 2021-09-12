@@ -1,12 +1,14 @@
-Data_path="./MSLR_30k_letor"   ## Data path where to unzip the data
+task_name=$1
+Data_path="../../MSLR_30k_letor"
 Data_folder="Fold1"            ## subfolder after unzip
 Feature_number=136              ## how many features for LETOR data
 Prepro_fun=""                ## additional function to do preprocessing, available, "log", "None", we default normalize data to -1 and 1. If choosing log, it will first using log function to the data and then normalize it to -1 and 1. 
 prefix=""                       ## name before data, for example setl.train.txt, prefix=set1.
-Data_zip_file=./MSLR-WEB30K.zip ## zipped data file path.
+Data_zip_file=/data/notebooks/jupyter-notebook/violatang/l2r-paper/MSLR-WEB30K.zip ## zipped data file path.
 cd ../../
 # Download MSLR-WEB30K dataset.
 # view https://www.microsoft.com/en-us/research/project/mslr/ for the download link
+
 
 mkdir $Data_path
 mkdir $Data_path/cleaned_data  # path to store data after cleaning
@@ -73,10 +75,13 @@ python ./libsvm_tools/prepare_exp_data_with_svmrank.py $Data_path/tmp_toy/data/ 
 
 
 
-export SETTING_ARGS="--data_dir=$Data_path/tmp_data/ --model_dir=$Data_path/tmp_model/ --output_dir=$Data_path/tmp_output/ --setting_file=./example/offline_setting/dla_exp_settings.json"
+export SETTING_ARGS="--data_dir=$Data_path/tmp_data/ --model_dir=$Data_path/tmp_model_${task_name}/ --output_dir=$Data_path/tmp_output/ --setting_file=./example/offline_setting_continuous/upper_bound_pointwise_exp_settings.json"
 echo $SETTING_ARGS
-# Run model
-python main.py --max_train_iteration=1000 $SETTING_ARGS
 
-Test model
-python main.py --test_only=True $SETTING_ARGS
+rm -rf $Data_path/tmp_model_${task_name}/
+
+# Run model
+python3 main.py --max_train_iteration=8000 $SETTING_ARGS
+
+# Test model
+python3 main.py --test_only=True $SETTING_ARGS

@@ -2,10 +2,12 @@
 from __future__ import absolute_import
 from .base_input_feed import *
 from .click_simulation_feed import *
+from .mtl_simulation_feed import *
+from .mtl_sep_simulation_feed import *
 from .direct_label_feed import *
+from .direct_label_mtl_sep_feed import *
 from .deterministic_online_simulation_feed import *
 from .stochastic_online_simulation_feed import *
-
 
 def list_available() -> list:
     from .base_input_feed import BaseInputFeed
