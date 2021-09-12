@@ -56,6 +56,8 @@ bash example/toy/offline_exp_pipeline.sh
 
 4. [DirectLabelFeed](https://github.com/ULTR-Community/ULTRA/blob/master/ultra/input_layer/direct_label_feed.py): this is the input layer that directly feed the true relevance labels of each documents to the learning algorithm.
 
+5. [MTLSimulationFeed] (https://github.com/phyllist/ULTRA/blob/master/ultra/input_layer/mtl_simulation_feed.py): this is the input layer that generate synthetic click and dwell-time on fixed ranked lists to feed the learning algorithm.
+
 ### Learning Algorithms
 
 1. [NA](https://github.com/ULTR-Community/ULTRA/blob/master/learning_algorithm/na.py): this model is an implementation of the naive algorithm that directly train models with input labels (e.g., clicks).
@@ -76,6 +78,8 @@ bash example/toy/offline_exp_pipeline.sh
 
 9. [PDGD](https://github.com/ULTR-Community/ULTRA/blob/master/learning_algorithm/pdgd.py): this model is an implementation of the Pairwise Differentiable Gradient Descent algorithm in <a href="https://arxiv.org/abs/1809.08415">*Differentiable unbiased online learning to rank*</a>
 
+10. [PAIRREGM](https://github.com/phyllist/ULTRA/blob/master/ultra/learning_algorithm/pairwise_reg_em.py): this model is an implementation of the pairwise regression-based EM algorithm of our paper "Unbiased Pairwise Learning to Rank in Recommender Systems".
+
 ### Ranking Models
 
 1. [Linear](https://github.com/ULTR-Community/ULTRA/blob/master/learning_algorithm/ranking_model/Linear.py): this is a linear ranking algorithm that compute ranking scores with a linear function.
@@ -87,6 +91,8 @@ bash example/toy/offline_exp_pipeline.sh
 4. [GSF](https://github.com/ULTR-Community/ULTRA/blob/master/learning_algorithm/GSF.py): this is an implementation of the Groupwise Scoring Function in <a href="https://arxiv.org/pdf/1811.04415.pdf">*Learning Groupwise Multivariate Scoring Functions Using Deep Neural Networks*</a>.
 
 5. [SetRank](https://github.com/ULTR-Community/ULTRA/blob/master/learning_algorithm/SetRank.py): this is an implementation of the SetRank model in <a href="https://arxiv.org/abs/1912.05891">*SetRank: Learning a Permutation-Invariant Ranking Model for Information Retrieval*</a>.
+
+6. [BiasTowerDNN] (https://github.com/phyllist/ULTRA/blob/master/ultra/ranking_model/BiasTowerDNN.py): this is an implementation of the shallow tower based DNN model
 
 ## Supported Evaluation Metrics
 
